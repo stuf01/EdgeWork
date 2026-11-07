@@ -1,4 +1,5 @@
 import { NavLink, Route, Routes } from "react-router-dom";
+import AgentsPage from "./pages/AgentsPage";
 import BacktestPage from "./pages/BacktestPage";
 import ChecklistsPage from "./pages/ChecklistsPage";
 import JournalPage from "./pages/JournalPage";
@@ -49,6 +50,7 @@ export default function App() {
           <NavLink to="/journal">Journal</NavLink>
           <NavLink to="/checklists">Checklists</NavLink>
           <NavLink to="/backtest">Backtest</NavLink>
+          <NavLink to="/agents">Agents</NavLink>
         </div>
       </nav>
       <Routes>
@@ -57,6 +59,7 @@ export default function App() {
         <Route path="/journal" element={<JournalPage />} />
         <Route path="/checklists" element={<ChecklistsPage />} />
         <Route path="/backtest" element={<BacktestPage />} />
+        <Route path="/agents" element={<AgentsPage />} />
         <Route path="/ticker/:symbol" element={<TickerDetailPage />} />
       </Routes>
     </div>

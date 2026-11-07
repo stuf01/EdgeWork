@@ -170,6 +170,7 @@ export default function BacktestPage() {
   const [costPerShare, setCostPerShare] = useState("0.02");
   const [riskPercent, setRiskPercent] = useState("1");
   const [startingAccount, setStartingAccount] = useState("10000");
+  const [skipEarningsDays, setSkipEarningsDays] = useState("0");
 
   const [result, setResult] = useState<BacktestResult | null>(null);
   const [pastRuns, setPastRuns] = useState<BacktestListItem[]>([]);
@@ -237,6 +238,7 @@ export default function BacktestPage() {
         cost_per_share: costPerShare,
         risk_per_trade_percent: riskPercent,
         starting_account: startingAccount,
+        skip_earnings_days: Number(skipEarningsDays) || 0,
       });
       showResult(payload);
       await refreshRuns();
@@ -517,6 +519,15 @@ export default function BacktestPage() {
               required
             />
           </label>
+          <label>
+            Skip trades near earnings (days)
+            <input
+              value={skipEarningsDays}
+              onChange={(e) => setSkipEarningsDays(e.target.value)}
+              inputMode="numeric"
+              title="0 = off. Skip setups within this many calendar days of an earnings date."
+            />
+          </label>
           <div className="form-actions span-2">
             <button type="submit" disabled={busy}>
               {busy ? "Running…" : "Run backtest"}
@@ -655,6 +666,15 @@ export default function BacktestPage() {
           <p className="muted-note">
             {result.symbols.join(", ")} · {result.start_date} → {result.end_date}{" "}
             · skipped days (insufficient history): {result.skipped_days}
+            {result.earnings_data_unavailable ? (
+              <> · earnings data unavailable (near-earnings skip not applied)</>
+            ) : result.earnings_trades_skipped != null &&
+              result.earnings_trades_skipped > 0 ? (
+              <>
+                {" "}
+                · trades skipped near earnings: {result.earnings_trades_skipped}
+              </>
+            ) : null}
           </p>
 
           <SummaryCards summary={result.summary} />

@@ -17,6 +17,7 @@ from decimal import Decimal
 from math import floor
 from typing import Optional, Sequence
 
+from app.earnings import is_within_earnings_window
 from app.journal import ClosedTrade, JournalStats, compute_stats
 from app.providers.base import Bar
 from app.scanner import avg_daily_volume, gap_percent, relative_volume
@@ -47,6 +48,7 @@ class BacktestParams:
     cost_per_share: Decimal = Decimal("0.02")
     risk_per_trade_percent: Decimal = Decimal("1")
     starting_account: Decimal = Decimal("10000")
+    skip_earnings_days: int = 0
 
 
 @dataclass(frozen=True)
@@ -84,6 +86,8 @@ class BacktestResult:
     by_year: dict[int, JournalStats] = field(default_factory=dict)
     errors: list[dict[str, str]] = field(default_factory=list)
     skipped_days: int = 0
+    earnings_trades_skipped: int = 0
+    earnings_data_unavailable: bool = False
 
 
 def validate_params(params: BacktestParams) -> None:
@@ -110,6 +114,8 @@ def validate_params(params: BacktestParams) -> None:
         raise ValueError("risk_per_trade_percent must be > 0 and <= 100")
     if params.starting_account <= 0:
         raise ValueError("starting_account must be > 0")
+    if params.skip_earnings_days < 0:
+        raise ValueError("skip_earnings_days must be >= 0")
 
 
 def validate_run_limits(
@@ -302,6 +308,8 @@ def run_backtest(
     end_date: date,
     params: BacktestParams,
     errors: Optional[list[dict[str, str]]] = None,
+    earnings_dates_by_symbol: Optional[dict[str, Sequence[date]]] = None,
+    earnings_data_unavailable: bool = False,
 ) -> BacktestResult:
     """Run the gap-breakout backtest across symbols and date range."""
     validate_params(params)
@@ -321,6 +329,8 @@ def run_backtest(
     trades: list[BacktestTrade] = []
     equity_curve: list[EquityPoint] = []
     skipped = 0
+    earnings_skipped = 0
+    earnings_map = earnings_dates_by_symbol or {}
 
     for day in sorted(all_dates):
         candidates: list[BacktestTrade] = []
@@ -338,8 +348,16 @@ def run_backtest(
             )
             if was_skipped:
                 skipped += 1
-            if trade is not None:
-                candidates.append(trade)
+            if trade is None:
+                continue
+            if params.skip_earnings_days > 0 and is_within_earnings_window(
+                trade.date,
+                earnings_map.get(symbol, ()),
+                params.skip_earnings_days,
+            ):
+                earnings_skipped += 1
+                continue
+            candidates.append(trade)
 
         # Largest gaps first; at most one per symbol already; max 5/day.
         candidates.sort(key=lambda t: t.gap_percent, reverse=True)
@@ -392,6 +410,8 @@ def run_backtest(
         by_year=by_year,
         errors=list(errors or []),
         skipped_days=skipped,
+        earnings_trades_skipped=earnings_skipped,
+        earnings_data_unavailable=bool(earnings_data_unavailable),
     )
 
 

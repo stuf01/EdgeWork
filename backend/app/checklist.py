@@ -36,6 +36,7 @@ RULE_REGISTRY: dict[str, ContextGetter] = {
     "risk_reward": _get("risk_reward"),
     "spread_percent": _get("spread_percent"),
     "stop_distance_percent": _get("stop_distance_percent"),
+    "days_to_earnings": _get("days_to_earnings"),
 }
 
 
@@ -273,4 +274,24 @@ def default_breakout_rules() -> list[dict[str, Any]]:
             "threshold": Decimal("1"),
             "required": False,
         },
+        {
+            "position": 7,
+            "label": "Days to earnings",
+            "rule_type": "days_to_earnings",
+            "operator": ">=",
+            "threshold": Decimal("2"),
+            "required": True,
+        },
     ]
+
+
+def days_to_earnings_seed_rule() -> dict[str, Any]:
+    """Rule to append to existing Breakout basics checklists if missing."""
+    return {
+        "position": 7,
+        "label": "Days to earnings",
+        "rule_type": "days_to_earnings",
+        "operator": ">=",
+        "threshold": Decimal("2"),
+        "required": True,
+    }

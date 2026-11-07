@@ -282,6 +282,9 @@ class ScannerResultItem(BaseModel):
     today_volume: int
     has_recent_news: Optional[bool] = None
     count_last_24h: Optional[int] = None
+    next_earnings_date: Optional[date] = None
+    days_until_earnings: Optional[int] = None
+    earnings_risk: Optional[str] = None
 
     @field_serializer(
         "last_price",
@@ -362,6 +365,10 @@ class TickerDetailResponse(BaseModel):
     sma_20: Optional[Decimal] = None
     sma_50: Optional[Decimal] = None
     gap_percent: Optional[Decimal] = None
+    next_earnings_date: Optional[date] = None
+    days_until_earnings: Optional[int] = None
+    earnings_risk: Optional[str] = None
+    earnings_time_of_day: Optional[str] = None
 
     @field_serializer("last_price", "sma_20", "sma_50", "gap_percent")
     def serialize_optional_money(self, value: Optional[Decimal]) -> Optional[str]:
@@ -384,6 +391,23 @@ class NewsItemResponse(BaseModel):
     url: str
     created_at: datetime
     symbols: list[str]
+
+
+class TickerEarningsResponse(BaseModel):
+    """Next earnings event and proximity risk for a ticker."""
+
+    symbol: str
+    next_earnings_date: Optional[date] = None
+    days_until_earnings: Optional[int] = None
+    earnings_risk: str
+    time_of_day: Optional[str] = None
+    eps_estimate: Optional[Decimal] = None
+
+    @field_serializer("eps_estimate")
+    def serialize_eps(self, value: Optional[Decimal]) -> Optional[str]:
+        if value is None:
+            return None
+        return _decimal_to_str(value)
 
 
 class TickerNewsResponse(BaseModel):
@@ -516,6 +540,7 @@ class BacktestCreateRequest(BaseModel):
     cost_per_share: Decimal = Field(default=Decimal("0.02"), ge=0)
     risk_per_trade_percent: Decimal = Field(default=Decimal("1"), gt=0, le=100)
     starting_account: Decimal = Field(default=Decimal("10000"), gt=0)
+    skip_earnings_days: int = Field(default=0, ge=0, le=30)
 
     @field_validator(
         "min_gap_percent",

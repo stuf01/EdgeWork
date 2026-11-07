@@ -13,6 +13,7 @@ from sqlalchemy.orm import Session
 from app.checklist import (
     ALLOWED_OPERATORS,
     RULE_REGISTRY,
+    days_to_earnings_seed_rule,
     default_breakout_rules,
 )
 from app.journal import ClosedTrade, realized_pnl, r_multiple
@@ -388,13 +389,42 @@ def delete_checklist(db: Session, checklist_id: int) -> bool:
 
 
 def ensure_default_checklist(db: Session) -> None:
-    """Seed Breakout basics if no checklists exist."""
+    """Seed Breakout basics if needed; add days_to_earnings if missing."""
     existing = db.scalars(select(Checklist).limit(1)).first()
-    if existing is not None:
+    if existing is None:
+        create_checklist(
+            db,
+            name="Breakout basics",
+            description="Default breakout setup checklist",
+            rules=default_breakout_rules(),
+        )
         return
-    create_checklist(
-        db,
-        name="Breakout basics",
-        description="Default breakout setup checklist",
-        rules=default_breakout_rules(),
+    ensure_breakout_earnings_rule(db)
+
+
+def ensure_breakout_earnings_rule(db: Session) -> None:
+    """Add days_to_earnings to Breakout basics when the rule is absent."""
+    checklist = db.scalars(
+        select(Checklist).where(Checklist.name == "Breakout basics")
+    ).first()
+    if checklist is None:
+        return
+    has_rule = any(
+        rule.rule_type == "days_to_earnings" for rule in checklist.rules
     )
+    if has_rule:
+        return
+    seed = days_to_earnings_seed_rule()
+    max_position = max((rule.position for rule in checklist.rules), default=-1)
+    db.add(
+        ChecklistRule(
+            checklist_id=checklist.id,
+            position=max(max_position + 1, int(seed["position"])),
+            label=str(seed["label"]),
+            rule_type=str(seed["rule_type"]),
+            operator=str(seed["operator"]),
+            threshold=seed["threshold"],
+            required=bool(seed["required"]),
+        )
+    )
+    db.commit()

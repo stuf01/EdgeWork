@@ -33,6 +33,39 @@ import {
 
 const CHICAGO = "America/Chicago";
 
+function formatEarningsSession(timeOfDay: string | null | undefined): string {
+  if (timeOfDay === "before_open") {
+    return "before open";
+  }
+  if (timeOfDay === "after_close") {
+    return "after close";
+  }
+  return "session unknown";
+}
+
+function EarningsWarningBanner({ detail }: { detail: TickerDetail }) {
+  const days = detail.days_until_earnings;
+  const risk = detail.earnings_risk;
+  if (days == null || risk == null || risk === "none" || risk === "later") {
+    return null;
+  }
+  if (days > 7) {
+    return null;
+  }
+  const high = risk === "today_or_tomorrow" || days <= 1;
+  const session = formatEarningsSession(detail.earnings_time_of_day);
+  const dayLabel = days === 0 ? "today" : days === 1 ? "1 day" : `${days} days`;
+  return (
+    <div
+      className={high ? "earnings-banner risk-high" : "earnings-banner"}
+      role="alert"
+    >
+      Earnings in {dayLabel} ({session}). A stop loss may not protect you from
+      an overnight gap.
+    </div>
+  );
+}
+
 function formatRelativeTime(iso: string, now = new Date()): string {
   const then = new Date(iso).getTime();
   const diffMs = Math.max(0, now.getTime() - then);
@@ -472,6 +505,7 @@ export default function TickerDetailPage() {
 
       {error ? <div className="error-banner" role="alert">{error}</div> : null}
       {pageLoading ? <p className="empty">Loading ticker detail…</p> : null}
+      {!pageLoading && detail ? <EarningsWarningBanner detail={detail} /> : null}
 
       {!pageLoading && detail ? (
         <div className="ticker-layout">

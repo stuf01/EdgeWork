@@ -39,7 +39,13 @@ Copy `backend/.env.example` → `backend/.env` (gitignored):
 ALPACA_API_KEY=your_alpaca_api_key
 ALPACA_API_SECRET=your_alpaca_api_secret
 ALPACA_DATA_URL=https://data.alpaca.markets
+FINNHUB_API_KEY=your_finnhub_api_key
+ALPACA_PAPER_URL=https://paper-api.alpaca.markets
 ```
+
+`FINNHUB_API_KEY` powers earnings dates/warnings. Without it, earnings fields stay empty and near-earnings backtest skipping is unavailable.
+
+`ALPACA_PAPER_URL` must be exactly `https://paper-api.alpaca.markets` (paper trading only). The Agents loop (NOVA→ORIN→VESK→LUMA, KIRA, DASH) never places live orders. VESK vetoes are final; KIRA only executes human-approved proposals. Keys are never logged.
 
 ### Run migrations
 

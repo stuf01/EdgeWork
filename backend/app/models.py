@@ -186,3 +186,142 @@ class BacktestRun(Base):
     end_date: Mapped[date] = mapped_column(Date, nullable=False)
     summary: Mapped[str] = mapped_column(Text, nullable=False)
     trades: Mapped[str] = mapped_column(Text, nullable=False)
+
+
+AGENT_NAMES = ("NOVA", "ORIN", "VESK", "LUMA", "KIRA", "DASH", "SYSTEM", "HUMAN")
+PROPOSAL_STATUSES = (
+    "pending",
+    "approved",
+    "rejected",
+    "expired",
+    "vetoed",
+    "executed",
+    "failed",
+    "cancelled",
+)
+
+
+class AgentSettings(Base):
+    """Single-row configuration for the paper agent loop."""
+
+    __tablename__ = "agent_settings"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    enabled: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="0"
+    )
+    kill_switch: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="0"
+    )
+    max_open_positions: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=3, server_default="3"
+    )
+    max_trades_per_day: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=3, server_default="3"
+    )
+    daily_loss_limit_percent: Mapped[Decimal] = mapped_column(
+        DecimalString, nullable=False, default=Decimal("3"), server_default="3"
+    )
+    risk_per_trade_percent: Mapped[Decimal] = mapped_column(
+        DecimalString, nullable=False, default=Decimal("1"), server_default="1"
+    )
+    proposal_ttl_minutes: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=10, server_default="10"
+    )
+    min_orin_score: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=60, server_default="60"
+    )
+    min_checklist_score: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=70, server_default="70"
+    )
+    checklist_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("checklists.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    cycle_interval_minutes: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=5, server_default="5"
+    )
+    scheduler_enabled: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="0"
+    )
+    backtest_weak_confirmed: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="0"
+    )
+
+
+class Proposal(Base):
+    """A candidate trade routed through the agent loop."""
+
+    __tablename__ = "proposals"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=_utc_now,
+        nullable=False,
+    )
+    cycle_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    symbol: Mapped[str] = mapped_column(String(32), nullable=False)
+    status: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="pending", server_default="pending"
+    )
+    entry: Mapped[Decimal] = mapped_column(DecimalString, nullable=False)
+    stop: Mapped[Decimal] = mapped_column(DecimalString, nullable=False)
+    target: Mapped[Decimal] = mapped_column(DecimalString, nullable=False)
+    shares: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    max_loss: Mapped[Optional[Decimal]] = mapped_column(DecimalString, nullable=True)
+    orin_score: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    orin_expected_move_percent: Mapped[Optional[Decimal]] = mapped_column(
+        DecimalString, nullable=True
+    )
+    checklist_score: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    vesk_result: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    luma_reasoning: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    expires_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    approved_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    order_id: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
+    journal_plan_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("trade_plans.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+
+
+class AgentEvent(Base):
+    """Append-only event log for the agent pipeline."""
+
+    __tablename__ = "agent_events"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=_utc_now,
+        nullable=False,
+    )
+    cycle_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    agent: Mapped[str] = mapped_column(String(16), nullable=False)
+    event_type: Mapped[str] = mapped_column(String(64), nullable=False)
+    symbol: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
+    proposal_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("proposals.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    duration_ms: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    payload: Mapped[str] = mapped_column(Text, nullable=False, default="{}")
+
+
+class AgentReview(Base):
+    """Persisted DASH review report."""
+
+    __tablename__ = "agent_reviews"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=_utc_now,
+        nullable=False,
+    )
+    report: Mapped[str] = mapped_column(Text, nullable=False)

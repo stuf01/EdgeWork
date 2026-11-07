@@ -50,13 +50,24 @@ type SortKey =
   | "relative_volume"
   | "avg_daily_volume"
   | "today_volume"
-  | "news";
+  | "news"
+  | "earnings";
 
 function newsSortValue(row: ScannerResultItem): number {
   if (row.has_recent_news == null && row.count_last_24h == null) {
     return -1;
   }
   return row.count_last_24h ?? (row.has_recent_news ? 1 : 0);
+}
+
+function earningsSortValue(row: ScannerResultItem): number {
+  if (row.days_until_earnings == null && row.earnings_risk == null) {
+    return Number.POSITIVE_INFINITY;
+  }
+  if (row.earnings_risk === "none" || row.days_until_earnings == null) {
+    return Number.POSITIVE_INFINITY - 1;
+  }
+  return row.days_until_earnings;
 }
 
 function compareRows(
@@ -74,6 +85,9 @@ function compareRows(
   }
   if (key === "news") {
     return (newsSortValue(a) - newsSortValue(b)) * mul;
+  }
+  if (key === "earnings") {
+    return (earningsSortValue(a) - earningsSortValue(b)) * mul;
   }
   const left = Number(a[key]);
   const right = Number(b[key]);
@@ -94,6 +108,35 @@ function NewsCell({ row }: { row: ScannerResultItem }) {
   return (
     <span className="news-dot none" title="No news in last 24h">
       0
+    </span>
+  );
+}
+
+function EarningsCell({ row }: { row: ScannerResultItem }) {
+  if (
+    row.earnings_risk == null &&
+    row.next_earnings_date == null &&
+    row.days_until_earnings == null
+  ) {
+    return <span className="news-unknown">—</span>;
+  }
+  if (row.earnings_risk === "none" || row.next_earnings_date == null) {
+    return <span className="news-unknown">—</span>;
+  }
+  const riskClass =
+    row.earnings_risk === "today_or_tomorrow"
+      ? "earnings-badge risk-high"
+      : row.earnings_risk === "this_week"
+        ? "earnings-badge risk-mid"
+        : "earnings-badge";
+  const label = row.next_earnings_date.slice(5);
+  const title =
+    row.days_until_earnings == null
+      ? row.next_earnings_date
+      : `${row.next_earnings_date} (${row.days_until_earnings}d)`;
+  return (
+    <span className={riskClass} title={title}>
+      {label}
     </span>
   );
 }
@@ -474,6 +517,15 @@ export default function ScannerPage() {
                       News{sortMarker("news")}
                     </button>
                   </th>
+                  <th>
+                    <button
+                      type="button"
+                      className="sort-btn"
+                      onClick={() => toggleSort("earnings")}
+                    >
+                      Earnings{sortMarker("earnings")}
+                    </button>
+                  </th>
                   <th />
                 </tr>
               </thead>
@@ -501,6 +553,9 @@ export default function ScannerPage() {
                       <td>{formatNumber(row.today_volume)}</td>
                       <td>
                         <NewsCell row={row} />
+                      </td>
+                      <td>
+                        <EarningsCell row={row} />
                       </td>
                       <td>
                         <Link

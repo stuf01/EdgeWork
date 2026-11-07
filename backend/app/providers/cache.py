@@ -47,9 +47,11 @@ bars_cache: TTLCache[Any] = TTLCache()
 # Chart bars keyed by (symbol, timeframe)
 chart_bars_cache: TTLCache[Any] = TTLCache()
 news_cache: TTLCache[Any] = TTLCache()
+earnings_cache: TTLCache[Any] = TTLCache()
 
 SNAPSHOT_TTL_SECONDS = 30
 BARS_TTL_SECONDS = 6 * 60 * 60
 INTRADAY_TTL_SECONDS = 30
 DAILY_CHART_TTL_SECONDS = 6 * 60 * 60
 NEWS_TTL_SECONDS = 5 * 60
+EARNINGS_TTL_SECONDS = 12 * 60 * 60

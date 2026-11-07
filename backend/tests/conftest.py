@@ -13,16 +13,23 @@ from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from app.database import Base, get_db
-from app.main import app, get_market_data_provider
+from app.main import app, get_earnings_data_provider, get_market_data_provider
 from app.models import (  # noqa: F401
+    AgentEvent,
+    AgentReview,
+    AgentSettings,
     BacktestRun,
     Checklist,
     ChecklistRule,
+    Proposal,
     TradePlan,
     WatchlistItem,
 )
 from app.providers.base import (
     Bar,
+    EarningsEvent,
+    EarningsProvider,
+    EarningsProviderError,
     IntradayBar,
     MarketDataError,
     MarketDataProvider,
@@ -245,6 +252,42 @@ class FakeProvider(MarketDataProvider):
         }
 
 
+class FakeEarningsProvider(EarningsProvider):
+    """In-memory earnings provider for API tests — no network."""
+
+    def __init__(self) -> None:
+        today = datetime.now(timezone.utc).date()
+        self.today = today
+        self.fail = False
+        self.events_by_symbol: dict[str, list[EarningsEvent]] = {
+            "GOOD": [
+                EarningsEvent(
+                    symbol="GOOD",
+                    date=today + timedelta(days=1),
+                    time_of_day="after_close",
+                    eps_estimate=Decimal("1.25"),
+                )
+            ],
+            "FLAT": [],
+        }
+
+    def get_earnings(
+        self,
+        symbol: str,
+        from_date: date,
+        to_date: date,
+    ) -> list[EarningsEvent]:
+        if self.fail:
+            raise EarningsProviderError("Earnings provider unavailable")
+        key = symbol.strip().upper()
+        events = self.events_by_symbol.get(key, [])
+        return [
+            event
+            for event in events
+            if from_date <= event.date <= to_date
+        ]
+
+
 @pytest.fixture()
 def db_session() -> Generator[Session, None, None]:
     engine = create_engine(
@@ -288,4 +331,21 @@ def client(db_session: Session) -> Generator[TestClient, None, None]:
 def fake_provider(client: TestClient) -> FakeProvider:
     provider = FakeProvider()
     app.dependency_overrides[get_market_data_provider] = lambda: provider
+    return provider
+
+
+@pytest.fixture()
+def fake_earnings(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> FakeEarningsProvider:
+    provider = FakeEarningsProvider()
+    app.dependency_overrides[get_earnings_data_provider] = lambda: provider
+
+    def _provide() -> FakeEarningsProvider:
+        return provider
+
+    monkeypatch.setattr("app.main.get_earnings_provider", _provide)
+    monkeypatch.setattr("app.checklist_context.get_earnings_provider", _provide)
+    monkeypatch.setattr("app.providers.get_earnings_provider", _provide)
     return provider

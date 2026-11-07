@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from decimal import Decimal
 from typing import Any, Optional
 
@@ -23,7 +23,13 @@ from app.backtest import (
 )
 from app.journal import JournalStats
 from app.models import BacktestRun, WatchlistItem
-from app.providers.base import Bar, MarketDataError, MarketDataProvider
+from app.providers.base import (
+    Bar,
+    EarningsProvider,
+    EarningsProviderError,
+    MarketDataError,
+    MarketDataProvider,
+)
 
 
 def _dec(value: Any) -> str:
@@ -47,6 +53,7 @@ def params_to_dict(params: BacktestParams) -> dict[str, Any]:
         "cost_per_share": _dec(params.cost_per_share),
         "risk_per_trade_percent": _dec(params.risk_per_trade_percent),
         "starting_account": _dec(params.starting_account),
+        "skip_earnings_days": int(params.skip_earnings_days),
     }
 
 
@@ -133,6 +140,8 @@ def result_payload(
         "trades": [trade_to_dict(t) for t in result.trades],
         "errors": result.errors,
         "skipped_days": result.skipped_days,
+        "earnings_trades_skipped": result.earnings_trades_skipped,
+        "earnings_data_unavailable": result.earnings_data_unavailable,
     }
 
 
@@ -217,6 +226,43 @@ def resolve_symbols(
     return unique
 
 
+def fetch_earnings_dates(
+    earnings_provider: Optional[EarningsProvider],
+    symbols: list[str],
+    start_date: date,
+    end_date: date,
+    skip_days: int,
+) -> tuple[dict[str, list[date]], bool]:
+    """Load earnings dates for the backtest window.
+
+    Returns (dates_by_symbol, data_unavailable).
+    """
+    if skip_days <= 0:
+        return {}, False
+    if earnings_provider is None:
+        return {}, True
+    pad = max(skip_days, 0)
+    from_date = start_date - timedelta(days=pad)
+    to_date = end_date + timedelta(days=pad)
+    dates_by_symbol: dict[str, list[date]] = {}
+    any_success = False
+    try:
+        events_map = earnings_provider.get_earnings_for_symbols(
+            symbols,
+            from_date,
+            to_date,
+        )
+    except EarningsProviderError:
+        return {}, True
+    for symbol in symbols:
+        events = events_map.get(symbol)
+        if events is None:
+            continue
+        any_success = True
+        dates_by_symbol[symbol] = [event.date for event in events]
+    return dates_by_symbol, not any_success
+
+
 def execute_and_save(
     db: Session,
     provider: MarketDataProvider,
@@ -226,6 +272,7 @@ def execute_and_save(
     end_date: date,
     params: BacktestParams,
     name: Optional[str] = None,
+    earnings_provider: Optional[EarningsProvider] = None,
 ) -> tuple[BacktestRun, dict[str, Any]]:
     validate_params(params)
     validate_run_limits(symbols, start_date, end_date)
@@ -235,12 +282,21 @@ def execute_and_save(
         start_date,
         end_date,
     )
+    earnings_dates, earnings_unavailable = fetch_earnings_dates(
+        earnings_provider,
+        symbols,
+        start_date,
+        end_date,
+        params.skip_earnings_days,
+    )
     result = run_backtest(
         bars_by_symbol,
         start_date,
         end_date,
         params,
         errors=errors,
+        earnings_dates_by_symbol=earnings_dates,
+        earnings_data_unavailable=earnings_unavailable,
     )
     payload = result_payload(
         result,
@@ -263,6 +319,8 @@ def execute_and_save(
                 "equity_curve": payload["equity_curve"],
                 "errors": payload["errors"],
                 "skipped_days": payload["skipped_days"],
+                "earnings_trades_skipped": payload["earnings_trades_skipped"],
+                "earnings_data_unavailable": payload["earnings_data_unavailable"],
             }
         ),
         trades=json.dumps(payload["trades"]),
@@ -290,6 +348,11 @@ def load_full_run(run: BacktestRun) -> dict[str, Any]:
         "equity_curve": summary_blob.get("equity_curve", []),
         "errors": summary_blob.get("errors", []),
         "skipped_days": summary_blob.get("skipped_days", 0),
+        "earnings_trades_skipped": summary_blob.get("earnings_trades_skipped", 0),
+        "earnings_data_unavailable": summary_blob.get(
+            "earnings_data_unavailable",
+            False,
+        ),
         "trades": json.loads(run.trades),
     }
 
@@ -332,4 +395,5 @@ def params_from_request(body: dict[str, Any]) -> BacktestParams:
         cost_per_share=d("cost_per_share", "0.02"),
         risk_per_trade_percent=d("risk_per_trade_percent", "1"),
         starting_account=d("starting_account", "10000"),
+        skip_earnings_days=int(body.get("skip_earnings_days", 0) or 0),
     )

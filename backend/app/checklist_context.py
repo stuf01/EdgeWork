@@ -2,14 +2,21 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from typing import Any, Optional
 
+from app.earnings import days_to_earnings_for_checklist
 from app.levels import key_levels, sma, vwap
 from app.news import news_activity
 from app.planner import calculate_plan
-from app.providers.base import MarketDataError, MarketDataProvider
+from app.providers import get_earnings_provider
+from app.providers.base import (
+    EarningsProvider,
+    EarningsProviderError,
+    MarketDataError,
+    MarketDataProvider,
+)
 from app.scanner import avg_daily_volume, gap_percent, relative_volume
 
 
@@ -20,6 +27,7 @@ def build_checklist_context(
     entry: Decimal,
     stop: Decimal,
     target: Decimal,
+    earnings_provider: Optional[EarningsProvider] = None,
 ) -> dict[str, Any]:
     """Gather market + plan metrics; missing pieces stay absent (None)."""
     symbol = symbol.strip().upper()
@@ -119,5 +127,21 @@ def build_checklist_context(
         context["has_recent_news"] = has_recent
     except MarketDataError:
         context["has_recent_news"] = None
+
+    today = datetime.now(timezone.utc).date()
+    try:
+        earn_provider = earnings_provider or get_earnings_provider()
+        events = earn_provider.get_earnings(
+            symbol,
+            today,
+            today + timedelta(days=90),
+        )
+        context["days_to_earnings"] = Decimal(
+            days_to_earnings_for_checklist(events, today)
+        )
+    except EarningsProviderError:
+        context["days_to_earnings"] = None
+    except Exception:  # noqa: BLE001 — optional enrichment
+        context["days_to_earnings"] = None
 
     return context

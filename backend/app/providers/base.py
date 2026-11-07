@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from datetime import date as DateType
 from datetime import datetime
 from decimal import Decimal
+from typing import Optional
 
 
 @dataclass(frozen=True)
@@ -58,8 +59,61 @@ class NewsItem:
     symbols: tuple[str, ...]
 
 
+@dataclass(frozen=True)
+class EarningsEvent:
+    """One earnings calendar event for a symbol."""
+
+    symbol: str
+    date: DateType
+    time_of_day: str  # before_open | after_close | unknown
+    eps_estimate: Optional[Decimal] = None
+
+
 class MarketDataError(Exception):
     """Raised when market data cannot be fetched or parsed cleanly."""
+
+
+class EarningsProviderError(Exception):
+    """Raised when earnings calendar data cannot be fetched cleanly."""
+
+
+class EarningsProvider(ABC):
+    """Swap-friendly interface for earnings calendar sources."""
+
+    @abstractmethod
+    def get_earnings(
+        self,
+        symbol: str,
+        from_date: DateType,
+        to_date: DateType,
+    ) -> list[EarningsEvent]:
+        """Return earnings events for ``symbol`` in ``[from_date, to_date]``.
+
+        Provider-level failures (auth, rate limit, network) raise
+        EarningsProviderError. An empty list means no events, not an error.
+        """
+
+    def get_earnings_for_symbols(
+        self,
+        symbols: list[str],
+        from_date: DateType,
+        to_date: DateType,
+    ) -> dict[str, list[EarningsEvent]]:
+        """Fetch earnings for many symbols sequentially.
+
+        One-symbol failures are omitted from the result (caller treats as null).
+        Subclasses may override for batching.
+        """
+        out: dict[str, list[EarningsEvent]] = {}
+        for symbol in symbols:
+            key = symbol.strip().upper()
+            if not key:
+                continue
+            try:
+                out[key] = self.get_earnings(key, from_date, to_date)
+            except EarningsProviderError:
+                continue
+        return out
 
 
 class MarketDataProvider(ABC):

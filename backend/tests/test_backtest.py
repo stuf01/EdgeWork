@@ -328,3 +328,43 @@ def test_run_backtest_produces_equity_curve() -> None:
     assert result.summary.total_trades == 1
     assert len(result.equity_curve) == 1
     assert result.equity_curve[0].equity > Decimal("10000")
+
+
+def test_skip_earnings_days_filters_trades() -> None:
+    day = date(2026, 4, 1)
+    hist = _history(day, close="10.00")
+    hist[-1] = Bar(
+        date=hist[-1].date,
+        open=Decimal("10"),
+        high=Decimal("10.20"),
+        low=Decimal("9.90"),
+        close=Decimal("10.00"),
+        volume=2_000_000,
+    )
+    today = _bar(day, "10.30", "10.80", "10.25", "10.70")
+    bars = hist + [today]
+    params = BacktestParams(
+        min_relative_volume=Decimal("1"),
+        min_avg_volume=Decimal("100"),
+        cost_per_share=Decimal("0"),
+        skip_earnings_days=2,
+    )
+    skipped = run_backtest(
+        {"ZZZ": bars},
+        start_date=day,
+        end_date=day,
+        params=params,
+        earnings_dates_by_symbol={"ZZZ": [day + timedelta(days=1)]},
+    )
+    assert skipped.trades == []
+    assert skipped.earnings_trades_skipped == 1
+
+    allowed = run_backtest(
+        {"ZZZ": bars},
+        start_date=day,
+        end_date=day,
+        params=params,
+        earnings_dates_by_symbol={"ZZZ": [day + timedelta(days=10)]},
+    )
+    assert len(allowed.trades) == 1
+    assert allowed.earnings_trades_skipped == 0

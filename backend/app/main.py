@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from typing import Any, Optional
 
@@ -14,6 +14,8 @@ from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
 
 from app import backtest_service, crud
+from app.agents.api import router as agents_router
+from app.agents.scheduler import start_scheduler, stop_scheduler
 from app.backtest import BacktestParams
 from app.checklist import ChecklistRuleSpec, evaluate, score
 from app.checklist_context import build_checklist_context
@@ -23,6 +25,7 @@ from app.crud import (
     PlanUpdateError,
 )
 from app.database import SessionLocal, get_db
+from app.earnings import days_until, next_earnings, risk_level
 from app.journal import (
     compute_stats,
     cumulative_pnl_series,
@@ -32,8 +35,13 @@ from app.journal import (
 from app.levels import key_levels, sma, vwap
 from app.news import news_activity
 from app.planner import calculate_plan
-from app.providers import get_provider
-from app.providers.base import MarketDataError, MarketDataProvider
+from app.providers import get_earnings_provider, get_provider
+from app.providers.base import (
+    EarningsProvider,
+    EarningsProviderError,
+    MarketDataError,
+    MarketDataProvider,
+)
 from app.scanner import avg_daily_volume, gap_percent, relative_volume
 from app.schemas import (
     BacktestCreateRequest,
@@ -59,6 +67,7 @@ from app.schemas import (
     ScannerResultItem,
     TagStatsBlock,
     TickerDetailResponse,
+    TickerEarningsResponse,
     TickerNewsResponse,
     TradePlanResponse,
     UpdatePlanRequest,
@@ -83,10 +92,15 @@ async def lifespan(_app: FastAPI):
         db.rollback()
     finally:
         db.close()
-    yield
+    start_scheduler()
+    try:
+        yield
+    finally:
+        stop_scheduler()
 
 
-app = FastAPI(title="Trade Planner API", version="0.6.0", lifespan=lifespan)
+app = FastAPI(title="Trade Planner API", version="0.7.0", lifespan=lifespan)
+app.include_router(agents_router)
 
 
 def _plan_response(plan) -> TradePlanResponse:
@@ -193,6 +207,57 @@ def get_market_data_provider() -> MarketDataProvider:
         return get_provider()
     except MarketDataError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+
+def get_earnings_data_provider() -> EarningsProvider:
+    """FastAPI dependency for the earnings calendar provider."""
+    try:
+        return get_earnings_provider()
+    except EarningsProviderError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+
+def _safe_earnings_fields(
+    earnings_provider: Optional[EarningsProvider],
+    symbol: str,
+    today,
+) -> dict[str, Any]:
+    """Lookup next earnings; return null fields on any failure."""
+    empty = {
+        "next_earnings_date": None,
+        "days_until_earnings": None,
+        "earnings_risk": None,
+        "time_of_day": None,
+        "eps_estimate": None,
+    }
+    if earnings_provider is None:
+        return empty
+    try:
+        events = earnings_provider.get_earnings(
+            symbol,
+            today,
+            today + timedelta(days=90),
+        )
+        upcoming = next_earnings(events, today)
+        if upcoming is None:
+            return {
+                "next_earnings_date": None,
+                "days_until_earnings": None,
+                "earnings_risk": "none",
+                "time_of_day": None,
+                "eps_estimate": None,
+            }
+        return {
+            "next_earnings_date": upcoming.date,
+            "days_until_earnings": days_until(upcoming, today),
+            "earnings_risk": risk_level(upcoming, today),
+            "time_of_day": upcoming.time_of_day,
+            "eps_estimate": upcoming.eps_estimate,
+        }
+    except EarningsProviderError:
+        return empty
+    except Exception:  # noqa: BLE001 — earnings is optional enrichment
+        return empty
 
 
 @app.post("/api/plans/calculate", response_model=CalculateResponse)
@@ -568,6 +633,47 @@ def run_scanner(
         except Exception:  # noqa: BLE001 — news is optional for scanner
             pass
 
+        # Earnings enrichment — never fail the scan.
+        try:
+            earn_provider = get_earnings_provider()
+            earn_map = earn_provider.get_earnings_for_symbols(
+                [row.symbol for row in results],
+                today,
+                today + timedelta(days=90),
+            )
+            with_earnings: list[ScannerResultItem] = []
+            for row in results:
+                events = earn_map.get(row.symbol)
+                if events is None:
+                    with_earnings.append(row)
+                    continue
+                upcoming = next_earnings(events, today)
+                if upcoming is None:
+                    with_earnings.append(
+                        row.model_copy(
+                            update={
+                                "next_earnings_date": None,
+                                "days_until_earnings": None,
+                                "earnings_risk": "none",
+                            }
+                        )
+                    )
+                else:
+                    with_earnings.append(
+                        row.model_copy(
+                            update={
+                                "next_earnings_date": upcoming.date,
+                                "days_until_earnings": days_until(upcoming, today),
+                                "earnings_risk": risk_level(upcoming, today),
+                            }
+                        )
+                    )
+            results = with_earnings
+        except EarningsProviderError:
+            pass
+        except Exception:  # noqa: BLE001 — earnings is optional for scanner
+            pass
+
     results.sort(key=lambda row: abs(row.gap_percent), reverse=True)
     excluded.sort(key=lambda row: abs(row.gap_percent), reverse=True)
     return ScannerResponse(
@@ -678,6 +784,12 @@ def ticker_detail(
     levels = key_levels(daily, snapshot.today_open, exclude_date=today)
     gap = gap_percent(snapshot.today_open, snapshot.prev_close)
 
+    try:
+        earn_provider: Optional[EarningsProvider] = get_earnings_provider()
+    except EarningsProviderError:
+        earn_provider = None
+    earnings_fields = _safe_earnings_fields(earn_provider, cleaned, today)
+
     return TickerDetailResponse(
         symbol=cleaned,
         timeframe=timeframe,
@@ -703,6 +815,50 @@ def ticker_detail(
         sma_20=sma(daily, 20),
         sma_50=sma(daily, 50),
         gap_percent=gap,
+        next_earnings_date=earnings_fields["next_earnings_date"],
+        days_until_earnings=earnings_fields["days_until_earnings"],
+        earnings_risk=earnings_fields["earnings_risk"],
+        earnings_time_of_day=earnings_fields["time_of_day"],
+    )
+
+
+@app.get("/api/tickers/{symbol}/earnings", response_model=TickerEarningsResponse)
+def ticker_earnings(
+    symbol: str,
+    earnings_provider: EarningsProvider = Depends(get_earnings_data_provider),
+) -> TickerEarningsResponse:
+    """Return the next earnings event and proximity risk for a symbol."""
+    cleaned = symbol.strip().upper()
+    if not cleaned:
+        raise HTTPException(status_code=404, detail="Symbol is required")
+
+    today = datetime.now(timezone.utc).date()
+    try:
+        events = earnings_provider.get_earnings(
+            cleaned,
+            today,
+            today + timedelta(days=90),
+        )
+    except EarningsProviderError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+    upcoming = next_earnings(events, today)
+    if upcoming is None:
+        return TickerEarningsResponse(
+            symbol=cleaned,
+            next_earnings_date=None,
+            days_until_earnings=None,
+            earnings_risk="none",
+            time_of_day=None,
+            eps_estimate=None,
+        )
+    return TickerEarningsResponse(
+        symbol=cleaned,
+        next_earnings_date=upcoming.date,
+        days_until_earnings=days_until(upcoming, today),
+        earnings_risk=risk_level(upcoming, today),
+        time_of_day=upcoming.time_of_day,
+        eps_estimate=upcoming.eps_estimate,
     )
 
 
@@ -749,6 +905,12 @@ def create_backtest(
     provider: MarketDataProvider = Depends(get_market_data_provider),
 ) -> dict:
     """Run a gap-breakout backtest, persist it, and return the full result."""
+    earnings_provider: Optional[EarningsProvider] = None
+    if body.skip_earnings_days > 0:
+        try:
+            earnings_provider = get_earnings_provider()
+        except EarningsProviderError:
+            earnings_provider = None
     try:
         symbols = backtest_service.resolve_symbols(
             db,
@@ -767,6 +929,7 @@ def create_backtest(
             cost_per_share=body.cost_per_share,
             risk_per_trade_percent=body.risk_per_trade_percent,
             starting_account=body.starting_account,
+            skip_earnings_days=body.skip_earnings_days,
         )
         _, payload = backtest_service.execute_and_save(
             db,
@@ -776,6 +939,7 @@ def create_backtest(
             end_date=body.end_date,
             params=params,
             name=body.name,
+            earnings_provider=earnings_provider,
         )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
